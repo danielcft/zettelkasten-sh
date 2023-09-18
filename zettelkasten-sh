@@ -1,0 +1,119 @@
+#!/bin/sh
+set -e
+
+help() {
+  cat <<EOF
+usage: zet [COMMAND]
+
+  add        Add a zet
+  view       View zet to stdout
+  edit       Edit a zet
+  delete     Delete a zet
+  grep       Grep for keywords
+  list       List zets
+  ref ID     Transform ID into a Markdown reference
+  health     Display Zettelkasten health statistics / build html
+EOF
+}
+
+add() {
+  # TODO: exit from editor without saving should not add zet
+  zet_dir_year="${ZET_DIR}"/"$(date +%y)"
+  if [ ! -d "${zet_dir_year}" ]; then mkdir "${zet_dir_year}"; fi
+  id="$(date +%y%m%d%H%M)"
+  filepath="${zet_dir_year}"/"${id}".md
+  printf "# %s %s\n\n%s\n\n%s" "${id}" "TITLE" "tags: #" "BODY" >>"${filepath}"
+  ${EDITOR} "${filepath}"
+}
+
+view() {
+  id="$(extractid "$1")"
+  folder="$(echo "${id}" | sed -E 's/([0-9]{2}).*/\1/')"
+  pandoc -f markdown -t plain "${ZET_DIR}"/"${folder}"/"${id}".md
+}
+
+edit() {
+  id="$(extractid "$1")"
+  folder="$(echo "${id}" | sed -E 's/([0-9]{2}).*/\1/')"
+  ${EDITOR} "${ZET_DIR}"/"${folder}"/"${id}".md
+}
+
+delete() {
+  id="$(extractid "$1")"
+  folder="$(echo "${id}" | sed -E 's/([0-9]{2}).*/\1/')"
+  rm "${ZET_DIR}"/"${folder}"/"${id}".md
+}
+
+extractid() {
+  if [ -z "$1" ]; then
+    # open by passing a header from sdin, ex: zet open <<<'# 1212101020 This is a title'
+    sed -E '/^# [0-9]{10} .*/ s/^# ([0-9]{10}) .*/\1/'
+  else
+    # open by passing the ID as a command argument ex: zet open '1212101020'
+    echo "$1"
+  fi
+}
+
+_ls() {
+  find "${ZET_DIR}/" -name '*.md' -maxdepth 2 -exec sed 1q {} \; \
+    | pandoc -f markdown -t plain \
+    | sed '/^$/d'
+}
+
+_grep() {
+  find "${ZET_DIR}/" -name '*.md' -maxdepth 2 -exec grep -El "$1" {} \; \
+    | while read -r result; do
+      printf "%80s\n" " " | tr " " "="
+      pandoc -f markdown -t plain "${result}"
+    done
+}
+
+ref() {
+  sed -E 's/^# ([0-9]*) (.*)/[\2](\1.md)/'
+}
+
+health() {
+  printf "%s" "All zets smaller than 4KB: "
+  du -k "${ZET_DIR}/"*.md | awk '{if ($1<=4) bad++;} END{ if(bad!=0) print "OK"; else print "BAD"}'
+  printf "%s" "All zets have valid markdown: "
+  if markdownlint "${ZET_DIR}"; then echo "OK"; else echo "BAD"; fi
+  printf "%s" "All zets have been commited: "
+  if [ -z "$(cd "${ZET_DIR}" && git status -s)" ]; then echo "OK"; else echo "BAD"; fi
+}
+
+main() {
+  if [ -z "${ZET_DIR}" ] || [ -z "${EDITOR}" ]; then
+    echo "\$ZET_DIR or \$EDITOR are not set"
+    exit 1
+  fi
+
+  if ! command -v pandoc >/dev/null; then
+    echo "pandoc not installed"
+    exit 1
+  fi
+
+  if [ "$#" -lt 1 ]; then
+    help
+    exit 1
+  fi
+
+  cd "${ZET_DIR}"
+  COMMAND="$1"
+  case "${COMMAND}" in
+  "a" | "add")       add ;;
+  "e" | "edit")      edit "$2" ;;
+  "d" | "delete")    delete "$2" ;;
+  "v" | "view")      view "$2" ;;
+  "l" | "ls")        _ls ;;
+  "g" | "grep")      _grep "$2" ;;
+  "r" | "ref")       ref ;;
+  "h" | "health")    health ;;
+  *)
+    printf "Invalid command: '%s'\n\n" "${COMMAND}" 1>&2
+    help
+    exit
+    ;;
+  esac
+}
+
+main "$@"
